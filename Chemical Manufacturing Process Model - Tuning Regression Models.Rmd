@@ -1,0 +1,184 @@
+---
+title: "Question 3.3 - ADS 503"
+author: "Amin Fesharaki"
+date: "5/24/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# ) In this scenario, the objective is to understand the relationship between biological measurements of the raw materials (predictors), measurements of the manufacturing process (predictors), and the response of product yield for a chemical manufacturing process for a pharmaceutical product. Biological predictors cannot be changed but can be used to assess the quality of the raw material before processing. On the other hand, manufacturing process predictors can be changed in the manufacturing process. Improving product yield by 1% will boost revenue by approximately one hundred thousand dollars per batch:
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE, warning=FALSE}
+library(AppliedPredictiveModeling)
+library(Hmisc)
+library(caret)
+library(MASS) #Robust Linear Regression
+library(pls) # PLS and PCR
+library(elasticnet) # Ridge and Lasso
+data(ChemicalManufacturingProcess)
+# The ChemicalManufacturingProcess data frame contains 57 predictors (12 describing the input biological material and 45 describing the process predictors) and a yield column which is the percent yield for each run for the 176 manufacturing runs.
+```
+
+## B)	A small percentage of cells in the predictor set contain missing values. Use an imputation function to fill in these missing values. 
+
+```{r}
+#Missing Value and Near Zero Variance
+
+Missing_Values <- data.frame(sapply(ChemicalManufacturingProcess, function(x) sum(is.na(x)))) # using sapply to find NA's and report the number of NA's for each predictor
+
+Clean <- apply(ChemicalManufacturingProcess, 2, function(x) {round(impute(x, mean),2)}) #apply to impute missing data based on column mean
+cleandf <- data.frame(Clean) #Transform into data frame
+
+cat("Total number of missing data from cleaned data set:", sum(is.na(cleandf)))
+
+NZV <- nearZeroVar(cleandf)
+cleandf <- cleandf[,-NZV]
+```
+
+## C)	Split the data into a training and a test set, pre-process the data, and tune linear model (lm), robust linear model (rlm), partial least squares model (pls), and elastic net model (enet) from chapter 6. What is the optimal value of the performance metric? 
+
+
+
+```{r}
+set.seed(3)
+# outcome in Yields column located in the first column 
+Yield <- cleandf[,1] 
+Data <- cleandf[,2:ncol(cleandf)]
+             
+
+set.seed(3)
+#Stratified Sample Partition with a .75/.25 split
+Sample <- createDataPartition(Yield, p=.75, list=FALSE)
+
+
+#Split Data into Test and Train Data Sets
+
+train_data <- cleandf[Sample,-1]
+test_data <- cleandf[-Sample,-1]
+
+train_yield <- cleandf[Sample,1]
+test_yield <- cleandf[-Sample,1]
+
+train_df <- data.frame(train_yield, train_data) #Combine training data
+
+# Convert to data frames
+#test_yield <- as.data.frame(test_perm)
+#train_yield <- as.data.frame(train_perm)
+
+# Convert to numeric for postResample
+#test_yield_num <- as.numeric(cleandf[-Sample,])
+
+```
+
+```{r}
+#Training parameters
+ctrl <- trainControl(method = "cv", number=10) #10-fold Cross Validation
+PreProcess = c("corr", "center", "scale") #Remove highly correlated predictors / center & scale data during modeling tuning 
+```
+
+```{r, warning=FALSE}
+#lm Tune
+set.seed(3)
+
+
+lmTune <- train(x = train_data,  y = train_df$train_yield, 
+                 method = "lm",
+                 trControl = ctrl,
+                tunelength = 20,
+                 preProc = PreProcess) 
+lmTune
+```
+
+```{r not working}
+#rlm Tune
+
+#rlmTune <- train(x = train_data,  y = train_df$train_yield, 
+#               method = "rlm",
+#                 trControl = ctrl,
+#                 tunelength = 10, 
+#                 preProc = PreProcess) 
+#rlmTune 
+# Warning: model fit failed for Fold01: intercept= TRUE, psi=psi.huber 
+#Error in rlm.default(x, y, weights, method = method, wt.method = wt.method,  : 
+#'x' is singular: singular fits are not implemented in 'rlm'
+```
+
+```{r}
+#PLS Tune
+set.seed(3)
+plsTune <- train(x = train_data,  y = train_df$train_yield, 
+                 method = "pls",
+                 tuneLength =  20,
+                 trControl = ctrl,
+                 preProc = PreProcess) 
+plsTune
+```
+
+```{r}
+#Elastic Tune
+set.seed(3)
+enetGrid <- expand.grid(lambda = c(0, 0.01, .1), 
+                        fraction = seq(.05, 1, length = 10))
+set.seed(3)
+enetTune <- train(x = train_data,  y = train_df$train_yield,
+                  method = "enet",
+                  tuneGrid = enetGrid,
+                  trControl = ctrl,
+                  preProc = PreProcess)
+enetTune
+```
+## D) Predict the response for the test set. What is the value of the performance metric, and how does this compare with the resampled performance metric on the training set? 
+
+```{r, warning=FALSE}
+# Predictions 
+
+#lm Prediction
+set.seed(3)
+lm_Prediction <- predict(lmTune, test_data)
+#PLS Prediction
+pls_Prediction <- predict(plsTune, test_data)
+#Robust Prediction
+#rlm_Prediction <- predict(Robust, test_data)
+#Elastic Prediction
+elastic_Prediction <- predict(enetTune, test_data)
+
+set.seed(3)
+# Calculate RMSE, R-Squared, MAE for each model test results
+Result_lm <- postResample(pred = lm_Prediction, obs = test_yield) #lm
+#Result_rlm <- postResample(pred = rlm_Prediction, obs = test_yield) #rlm
+Result_pls <- postResample(pred = pls_Prediction, obs = test_yield) #pls
+Result_elastic <- postResample(pred = elastic_Prediction, obs = test_yield) #enet
+```
+
+```{r}
+# Compare Models (RMSE, R^2, MAE)
+Model_Results <- as.data.frame(rbind(Result_lm, Result_pls, Result_elastic))
+Model_Results <- round(Model_Results,3)
+Model_Results
+```
+The training set had Rsquare values for the following: lm with .419, pls with .555, and elastic with .592. Therefore, the test response had a higher Rsquared value than the training set for every model that was provided.  
+
+## E)	Which predictors are most important in the model you have trained? Does either of the biological or process predictors dominate the list? 
+
+```{r}
+#Plotting the Predictor Importance
+
+lmImp <- varImp(lmTune, scale = FALSE)
+plot(lmImp, top = 25, scales = list(y = list(cex = .95)))
+
+#rlmImp <- varImp(pcrTune, scale = FALSE)
+#plot(pcrImp, top = 25, scales = list(y = list(cex = .95)))
+
+plsImp <- varImp(plsTune, scale = FALSE)
+plot(plsImp, top = 25, scales = list(y = list(cex = .95)))
+
+elasticImp <- varImp(enetTune, scale = FALSE)
+plot(elasticImp, top = 25, scales = list(y = list(cex = .95)))
+
+```
+Based on the output from the plots, the manufacturing predictors dominate the list of the most important predictors. The top 3 most important predictors for lm were Manufacturing Process 32,33, & 43, for pls it was Manufacturing Process 32, 13, & 17, and for elastic it was Manufacturing process 32, 13, & Biological Material 06.

@@ -1,0 +1,90 @@
+---
+title: "Chapter 11 Multiple Regression"
+author: "Amin Fesharaki"
+date: "11/6/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#For the following exercises, work with the bank_reg_training and the bank_reg_test data sets. Use either Python or R to solve each problem.
+```{r}
+#Import Datasets
+bank_test <- read.csv(file = "/Users/datascience/Desktop/ADS 502 Data Sets/Website Data Sets/bank_reg_test.csv")
+bank_train <- read.csv(file = "/Users/datascience/Desktop/ADS 502 Data Sets/Website Data Sets/bank_reg_training.csv")
+
+#Convert Categorical Variables into Factors
+bank_test$Approval <- as.factor(bank_test$Approval)
+bank_train$Approval <- as.factor(bank_train$Approval)
+```
+
+## 34. Use the training set to run a regression predicting Credit Score, based on Debt‐to‐Income Ratio and Request Amount. Obtain a summary of the model. Do both predictors belong in the model?
+```{r}
+#Create model with training set
+RegModel <- lm(formula = Credit.Score ~ Debt.to.Income.Ratio + Request.Amount, data = bank_train)
+
+#Summary of the model
+summary(RegModel)
+```
+** Both independent variables are statistically significant(p-values) with a low R-squared value indicates that the independent variables are correlated with the dependent variable. In addition, the adjusted R-squared value is the same value as the R^squared value; this shows that there are no useless predictor variables to the model. Therefore, both predictors belong in the model. **
+
+## 35. Validate the model from the previous exercise.
+```{r}
+# Validate model using the test dataset
+RegModel_test <- lm(formula = Credit.Score ~ Debt.to.Income.Ratio + Request.Amount, data = bank_test)
+
+#Summary of the model
+summary(RegModel_test)
+```
+** Regression Model using training data and the Regression Model using testing data exhibit similar summary results. Therefore, these results validate the results from the model using the training data. **
+
+## 36. Use the regression equation to complete this sentence: “The estimated Credit Score equals....”
+** The estimated Credit Score equals The estimated Credit Score equal 6.685e+02 - 4.813e+01(Debt-to-Income Ratio) + 1.075e-03(Request Amount) **
+
+
+## 37. Interpret the coefficient for Debt‐to‐Income Ratio.
+** The estimated decrease in Credit Score with a Debt-to-Income Ratio is -48.13, when Request Amount is held constant. However, generally the debt to income ratio doesn't impact your credit scores, but it is a factor when deciding to approve credit applications. **
+
+## 38. Interpret the coefficient for Request Amount.
+** The estimated increase in Credit Score with a Request Amount is 0.001075, when Request Amount is held constant. This makes sense since Request Amount generally affects whether or not the loan application is approved. Morevoer, applying for loans (i.e., request amount) can temporarily knock a few points off the credit score. Therefore, the low contribution towards credit score is valid. **
+
+## 39. Find and interpret the value of s.
+** The standard error is called the "Residual Standard Error" which was found using the summary command in Q.34. Thus, the Standard Error of the model was determined to be 66. In other words, the size of the model's typical prediction error is about 66.02 (when predicting Credit Score with Debt-to-Income Ratio and Request Amount). **
+
+## 40. Find and interpret R2 (adjusted) . Comment.
+** The R-squared-adjusted was found using the summary command in Q.34. The R-squared-adjusted has a value of 0.02821. Thus, 2.821% of the variability in Credit Score is accounted by the predictors Debt-to-Income Ratio and Request Amount. Determining Credit Score incorporates many other factors, therefore the regression model's small R-squared-adjusted proportion makes sense. **
+
+## 41. Find MAE_Baseline and MAE_Regression, and determine whether the regression model outperformed its baseline model.
+```{r, message=FALSE, warning=FALSE}
+# Mean Absolute Error of the model
+
+library(MLmetrics)
+
+### MAE_Regression ###
+
+# Find actual and predicted values for all records in the test data using the training data model
+X_test <- data.frame(Debt.to.Income.Ratio = bank_test$Debt.to.Income.Ratio, Request.Amount = bank_test$Request.Amount ) #Create Dataframe for X_test
+
+ypred <- predict(object = RegModel, newdata = X_test) 
+ytrue <- bank_test$Credit.Score
+MAE_Regression <- MAE(y_pred = ypred, y_true = ytrue)
+
+## MAE_Baseline ###
+# Calculate the errors made by the baseline model (using test set)
+ybar <- mean(bank_test$Credit.Score) #Create a new array with ybar values
+copy <- replace(bank_test$Credit.Score, bank_test$Credit.Score>0,ybar)
+
+ypred_B <- copy
+ytrue_B <- bank_test$Credit.Score
+MAE_Baseline <- MAE(y_pred = ypred_B, y_true = ytrue_B)
+
+# Displaying MAE for Baseline and Regression 
+cat("The MAE for the Regression Model is equal to ", MAE_Regression)
+cat(" & ")
+cat("The MAE for the Baseline Model is equal to ", MAE_Baseline)
+```
+** Since 47.79 = MAE_Regression < MAE_Baseline = 48.60, the regression model outperformed the baseline model. **
