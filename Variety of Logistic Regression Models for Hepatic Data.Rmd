@@ -1,0 +1,136 @@
+---
+title: "Question 2"
+author: "Amin Fesharaki"
+date: "6/12/2022"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+
+#### Brodnjak-Vonina et al. (2005) develop a methodology for food laboratories to determine the type of oil from a sample. In their procedure, they used a gas chromatograph (an instrument that separates chemicals in a sample) to measure seven different fatty acids in an oil. These measurements would then be used to predict the type of oil in a food sample. To create their model, they used 96 samples of seven types of oils. These data can be found in the caret package using data(oil). The oil types are contained in a factor variable called oilType. The types are pumpkin (coded as A), sunflower (B), peanut (C), olive (D), soybean (E), rapeseed (F), and corn (G). We would like to use these data to build a model that predicts the type of oil-based on a sample’s fatty acid percentages.
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, message=FALSE}
+library(caret)
+library(pROC)
+library(AppliedPredictiveModeling)
+library(dplyr)
+library(MASS)
+library(glmnet)
+data(oil)
+```
+
+## **a)**	Given the classification imbalance in hepatic injury status, describe how you would create a training and testing set. 
+
+```{r}
+cat("Check for NA values for each predictor","\n")
+sapply(fattyAcids, FUN = function(x) sum(is.na(x))) #No missing values
+#Count samples
+cat("\nNumber of obs =", nrow(fattyAcids), "\nNumber of predictors =", as.numeric(ncol(fattyAcids)))
+#Near Zero Variance Check
+cat("\nNumber of Near Zero Variance predictors = ")
+nzv(fattyAcids)
+#Linear Combination Check
+cat("\nCheck for Linear Combos in predictors data set = ")
+findLinearCombos(fattyAcids)$remove 
+#Correlations will not be removed since each predictor is an oil type we are tying to predict
+#Observe Class Distribution
+barplot(table(oilType), main ="Oil Type Class Distribution", xlab ="Oil Type", ylab="Count") 
+
+```
+The amount of data is limited, therefore we will use the entire data for model building. Thus, the data set will not be split into test and training set. Splitting into the data will result in a very few samples for each class. Instead, cross validation will be used to asses the model. 
+
+```{r}
+fattyAcids$Type <- oilType
+```
+
+
+
+## **b)**	Which classification statistic would you choose to optimize for this exercise and why? 
+The optimal classification statistic for this data set would be **Accuracy**; we're trying to predict oil type, and the outcomes seem to share a similar impact (there is not one outcome considered worse to have unlike predictions in th health sector).
+
+
+
+## **c)**	Build linear discriminant analysis, penalized multinomial regression, and Nearest shrunken centroids models to this data; which model performs best on these data? Which oil type does the model most accurately predict? Which oil type does the model least accurately predict? 
+```{r}
+#Control for all models
+ctrl <- trainControl(method = "cv",
+                    classProbs = TRUE,
+                    savePredictions = TRUE)
+```
+
+```{r}
+#Pre Process
+set.seed(2)
+Process <- preProcess(fattyAcids, "center", "scale", "BoxCox")
+data <- predict(Process, fattyAcids)
+```
+
+
+#### Linear Discriminant Analysis
+```{r LDA, warning = FALSE}
+set.seed(2)
+#Create Penalized model
+
+ldaFit = lda(Type ~ Palmitic+Stearic+Oleic+Linoleic+Eicosanoic + Eicosenoic, data = data, cv= TRUE)
+
+#Store Predictions
+lda <- predict(ldaFit, data[,1:7])
+LDA_pred <- lda$class
+testResults <- data.frame(obs = data$Type,
+                         LDA = LDA_pred)
+table(LDA_pred, data$Type) #Coefficient Matrix
+```
+#### Penalized  Regression
+```{r Penalized, warning=FALSE}
+#Create Penalized model
+
+glmnGrid <- expand.grid(alpha = c(0,  .1,  .2, .4, .6, .8, 1),
+                        lambda = seq(.01, .2, length = 20))
+set.seed(2)
+glmnFit <- train(x = data[,1:7], 
+                 y = data$Type,
+                 method = "glmnet",
+                 tuneGrid = glmnGrid,
+                 preProc = c("center", "scale"),
+                 metric = "Accuracy",
+                 family = "multinomial",
+                 trControl = ctrl)
+testResults$glmnet <- predict(glmnFit, data[,1:7])
+
+glmn_pred <- predict(glmnFit, data[,1:7])
+table(glmn_pred, data$Type) #Coefficient Matrix
+```
+### Nearest Shrunken Centroid
+```{r, warning=FALSE}
+set.seed(2)
+nscFit <- train(x = data[,1:7], 
+                y = data$Type,
+                method = "pam",
+                preProc = c("center","scale"),
+                metric = "Accuracy",
+                tuneGrid = data.frame(threshold = seq(0, 2, length = 50)),
+                trControl = ctrl)
+testResults$nscFit <- predict(nscFit, data[,1:7])
+nsc_pred <- predict(nscFit, data[,1:7])
+table(nsc_pred, data$Type) #Coefficient Matrix
+```
+### Accuracy 
+```{r}
+#Model Accuracy
+Model_Acurracy <- data.frame(lda = mean(LDA_pred == data$Type))
+Model_Acurracy$penalized <- mean(glmn_pred == data$Type)
+Model_Acurracy$nsc <- mean(nsc_pred == data$Type)
+rownames(Model_Acurracy) = "Model Acuraccy"
+Model_Acurracy
+```
+According to the accuracy table (as well as the coefficient matrix), the nearest shrunken neighbors resulted in the most accurate model to predict oil type with an accuracy of 97.9%. NSC classified two A oil types, but other than that, it has predicted every other sample with 100% accuracy.  Linear discriminant analysis resulted in the lowest accuracy performance with an accuracy of 94.5%. 
