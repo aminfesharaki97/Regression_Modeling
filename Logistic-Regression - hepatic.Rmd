@@ -1,0 +1,424 @@
+---
+title: "Question 1"
+author: "amin"
+date: "6/10/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+#### The hepatic injury data set was described in the introductory chapter and contains 281 unique compounds, each of which has been classified as causing no liver damage, mild damage, or severe damage. These compounds were analyzed with 184 biological screens (i.e., experiments) to assess each compound’s effect on a particular biologically relevant target in the body. The larger the value of each of these predictors, the higher the activity of the compound. In addition to biological screens, 192 chemical fingerprint predictors were determined for these compounds. Each of these predictors represent a substructure (i.e., an atom or combination of atoms within the compound) and are either counts of the number of substructures or an indicator of presence or absence of the particular substructure. The objective of this data set is to build a predictive model for hepatic injury so that other compounds can be screened for the likelihood of causing hepatic injury. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r}
+library(caret)
+library(pROC)
+library(AppliedPredictiveModeling)
+data(hepatic)
+```
+
+
+```{r PreProcessing}
+# Pre Process 
+
+# Lump all compounds that cause injury into a "Yes" category:
+any_damage = as.character( injury )
+any_damage[ any_damage=="Mild" ] = "Yes"
+any_damage[ any_damage=="Severe" ] = "Yes"
+any_damage[ any_damage=="None" ] = "No"
+
+# Convert our response to a factor (make the first factor correspond to the event of interest):
+any_damage = factor( any_damage, levels=c("Yes","No")) 
+
+#The data frames bio and chem contain the biological assay and chemical fingerprint predictors for the 281 compounds, while the factor variable injury contains the liver damage classification for each compound.
+```
+
+## **a)**	Given the classification imbalance in hepatic injury status, describe how you would create a training and testing set. 
+```{r}
+table(injury)
+table(any_damage)
+```
+    
+There are 3 categories for injury: none(106), mild (145), severe (30). In order to reduce class imbalance and reduce the number of responses to create a binary classification model, mild and severe will be set to "yes" and none will be set to "no". Now the 'yes' class has 175 obs and 'no' has 106. To help control the class imbalance, we will be using *stratified sampling* to create a more balanced class distribution.  
+
+## **b)**	Which classification statistic would you choose to optimize for this exercise and why? 
+
+There are 3 different metrics to consider when deciding the best model: accuracy, sensitivity, and specificity. In regards to health models, it is often more important to choose a model with a higher sensitivity or specificity rather than overall accuracy. In summary, sensitivity tests its ability to correctly identify those with liver damage, while specificity tests its ability to correctly identify those without the liver damage. In the case of the hepatic data, it is more important to accurately predict 'yes' values than 'no' values. Predicting 'yes' corresponds to someone having hepatic injury which is a serious health concern. Therefore, a false negative should be considered more than a false positive. Since we want to minimize false negative results, *sensitivity* should be optimized.
+
+**Overview**  
+*Important to understand for model results (Confusion Matrix)*  
+*Injury = 'yes' = 'Positive' 
+*No Injury = 'no' = 'Negative'
+*True Positive - Predicted compound IS hepatic || Real compound actually IS hepatic
+*True Negative - Predicted compound is NOT hepatic || Real compound is actually NOT hepatic
+*False Positive - Predicted compound IS hepatic || Real  compound is actually NOT hepatic
+*False Negative - Predicted compound in actually NOT hepatic || Real compound is actually hepatic  
+
+**Reasoning**   
+*Sensitivity* measures the proportion of positive test results of all true samples. Therefore, test's sensitivity correctly identify observations true positive (liver damage), while minimizing the number of false negatives. In a similar real world scenario, it is less harmful/impact to have a false positive than a false negative since the compound isn't really in danger. If a false positive were to happen and the compound looks fine, then a doctor would normally retest the compound to double check. However, a false negative puts the compound in real danger by diagnosing the compound is healthy, but in reality, the compound has hepatic injury.    
+
+## **c)**	Split the data into a training and a testing set, pre-process the data, and build models described in this chapter for the biological predictors and separately for the chemical fingerprint predictors. Which model has the best predictive ability for the biological predictors, and what is the optimal performance? (c.1) Which model has the best predictive ability for the chemical predictors, and what is the optimal performance? (c.2) Based on these results, which set of predictors contains the most information about hepatic toxicity? (c.3)
+
+### Split
+```{r Split}
+#Split Data Set into train & test
+set.seed(1)
+
+#Stratified Sample Partition with a  80/20 split
+Sample <- createDataPartition(any_damage, p=.8, list=FALSE)
+
+#Split Data into Test and Train Data Sets - Biological (Predictors)
+bio_train_x <- bio[Sample,]
+bio_test_x <- bio[-Sample,]
+
+#Split Data into Test and Train Data Sets - Chemical (Predictors)
+chem_train_x <- chem[Sample,]
+chem_test_x <- chem[-Sample,]
+
+
+#Split Data into Test and Train Data Sets - Damage (Response)
+dmg_train_y <- any_damage[Sample]
+dmg_test_y <- any_damage[-Sample]
+```
+
+### Pre-Process
+```{r PreProcessss}
+set.seed(1)
+#PreProcess the data (Knn Impute, Near Zero Variance, and Linear Combos)
+
+#Biological
+tran_bio <- preProcess(bio_train_x,
+                    method = c( "knnImpute", 
+                    "nzv"))
+bio_train_xTran <- predict(tran_bio,bio_train_x)
+bio_test_xTran <- predict(tran_bio,bio_test_x)
+#Chemical
+tran_chem <- preProcess(chem_train_x,
+                    method = c(  "knnImpute", 
+                    "nzv"))
+chem_train_xTran <- predict(tran_chem,chem_train_x)
+chem_test_xTran <- predict(tran_chem,chem_test_x)
+
+# Remove Collinearity 
+bio_collinear <- findLinearCombos(bio) # No linear Combos for biological data
+chem_collinear <- findLinearCombos(chem)$remove
+chem_train_xTran <- chem_train_xTran[-c(chem_collinear)]
+chem_test_xTran <- chem_test_xTran[-c(chem_collinear)]
+```
+
+### Build Models
+
+```{r Control}
+#Set Control - Cross Validation
+ctrl <- trainControl(method = "cv",
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE,
+                     savePredictions = TRUE)
+```
+
+#### Generalized Linear Model
+```{r GLM, warning = FALSE}
+set.seed(1)
+#Create glm model
+
+bio_glmFit <- train(x = bio_train_xTran, 
+                y = dmg_train_y,
+                method = "glm",
+                preProc = c("center","scale"),
+                metric = "Sens",
+                family = "binomial",
+                trControl = ctrl)
+
+chem_glmFit <- train(x = chem_train_xTran, 
+                y = dmg_train_y,
+                method = "glm",
+                preProc = c("center","scale"),
+                metric = "Sens",
+                family = "binomial",
+                trControl = ctrl)
+
+#Store Predictions
+bio_testResults <- data.frame(obs = dmg_test_y)
+bio_testResults$GLM <- predict(bio_glmFit, bio_test_xTran)
+
+chem_testResults <- data.frame(obs = dmg_test_y)
+chem_testResults$GLM <- predict(chem_glmFit, chem_test_xTran)
+```
+
+#### Linear Discriminant Analysis
+```{r LDA, warning = FALSE}
+set.seed(1)
+#Create LDA model
+
+bio_ldaFit <- train(x = bio_train_xTran, 
+                y = dmg_train_y,
+                method = "lda",
+                preProc = c("center","scale"),
+                metric = "Sens",
+                family = "binomial",
+                trControl = ctrl)
+
+chem_ldaFit <- train(x = chem_train_xTran, 
+                y = dmg_train_y,
+                method = "lda",
+                preProc = c("center","scale"),
+                metric = "Sens",
+                family = "binomial",
+                trControl = ctrl)
+
+#Store Predictions
+bio_testResults$LDA <- predict(bio_ldaFit, bio_test_xTran)
+chem_testResults$LDA <- predict(chem_ldaFit, chem_test_xTran)
+```
+
+#### Penalized Logistic Regression
+```{r Pen, warning = FALSE}
+glmnGrid <- expand.grid(alpha = c(0,  .1,  .2, .4, .5, .6, .8, .9, 1),
+                        lambda = seq(.01, .3, length = 20))
+
+set.seed(1)
+#Create glmnet model
+
+bio_glmnFit <- train(x = bio_train_xTran, 
+                y = dmg_train_y,
+                method = "glmnet",
+                tuneGrid = glmnGrid,
+                preProc = c("center","scale"),
+                metric = "ROC", #ROC is used instead of Sens,
+                family = "binomial",
+                trControl = ctrl) 
+
+# metric = Sens results in a model with Yes predictions for all  (Sens=1 / Spec = 0), 
+# therefore, ROC will be used instead, but FN will be looked at
+
+chem_glmnFit <- train(x = chem_train_xTran, 
+                y = dmg_train_y,
+                method = "glmnet",
+                preProc = c("center","scale"),
+                metric = "ROC", #ROC is used instead of Sens
+                family = "binomial",
+                trControl = ctrl)
+
+#Store Predictions
+bio_testResults$GLMnet <- predict(bio_glmnFit, bio_test_xTran)
+chem_testResults$GLMnet <- predict(chem_glmnFit, chem_test_xTran)
+```
+
+#### Nearest Shrunken Centroids 
+```{r NSC}
+set.seed(1)
+#Create Nearest Shrunken Centroid model
+
+bio_nscFit <- train(x = bio_train_xTran, 
+                y = dmg_train_y,
+                method = "pam",
+                preProc = c("center","scale"),
+                metric = "ROC", #ROC is used instead of Sens
+                tuneGrid = data.frame(threshold = seq(0, 2, length = 50)),
+                trControl = ctrl)
+
+# metric = Sens results in a model with Yes predictions for all  (Sens=1 / Spec = 0), 
+# therefore, ROC will be used instead, but FN will be looked at
+
+chem_nscFit <- train(x = chem_train_xTran, 
+                y = dmg_train_y,
+                method = "pam",
+                preProc = c("center","scale"),
+                metric = "ROC", #ROC is used instead of Sens
+                tuneGrid = data.frame(threshold = seq(0, 2, length = 50)),
+                trControl = ctrl)
+
+#Store Predictions
+bio_testResults$NSC <- predict(bio_nscFit, bio_test_xTran)
+chem_testResults$NSC <- predict(chem_nscFit, chem_test_xTran)
+
+```
+
+### Model Performance Comparison
+
+```{r comparemodels Bio}
+set.seed(1)
+### Compare Models using confusion matrix - Biological
+
+confusionMatrix(bio_testResults$GLM, dmg_test_y, positive = "Yes")
+confusionMatrix(bio_testResults$LDA, dmg_test_y, positive = "Yes")
+confusionMatrix(bio_testResults$GLMnet, dmg_test_y, positive = "Yes")
+confusionMatrix(bio_testResults$NSC, dmg_test_y, positive = "Yes")
+```
+
+
+```{r comparemodels Chem}
+set.seed(1)
+### Compare Models using confusion matrix - Chemical
+
+confusionMatrix(chem_testResults$GLM, dmg_test_y, positive = "Yes")
+confusionMatrix(chem_testResults$LDA, dmg_test_y, positive = "Yes")
+confusionMatrix(chem_testResults$GLMnet, dmg_test_y, positive = "Yes")
+confusionMatrix(chem_testResults$NSC, dmg_test_y, positive = "Yes")
+```
+
+## **(c.1)**Which model has the best predictive ability for the biological predictors, and what is the optimal performance?
+```{r Best Bio}
+# Best Model for Biological - Nearest Shrunken Centroids 
+confusionMatrix(bio_testResults$NSC, dmg_test_y, positive = "Yes")
+# Final Model 
+bio_nscFit$finalModel
+```
+The Nearest Shrunken Centroid  has the best predictive performance for the biological data set with an optimal threshold value of 1.224. The model resulted in the least amount of false negatives, which is important for health predictions. 
+###  **(c.2)** Which model has the best predictive ability for the chemical predictors, and what is the optimal performance?
+
+```{r Best Chem}
+# Best Model for Chemical - Nearest Shrunken Centroids 
+confusionMatrix(chem_testResults$GLMnet, dmg_test_y, positive = "Yes")
+# Final Model
+chem_glmnFit
+```
+The penalized logistic regression model yield the best performance for the chemical data set. Although NSC has slightly better sensitivy, it resulted in almost every prediction being yes (thus having low accuracy). Therefore the glmnet model would be the better choice for the chemical data set. The optimal values for the GLMnet model had an alpha of 0.1 and a lambda of 0.0196
+## **(c.3)** Based on these results, which set of predictors contains the most information about hepatic toxicity?  
+
+## **d)**	For the optimal models for both the biological and chemical predictors, what are the top five important predictors? 
+```{r VarImpBio}
+set.seed(1)
+#Variable Importance for Biological NSC (Optimal Model)
+bio_imp <- varImp(bio_nscFit)
+plot(bio_imp, top = 5, main = "Top 5 Important Biological Predictors")
+```
+The graph above shows the top 5 predictors for the biological data set.  
+
+```{r VarImpChem}
+set.seed(1)
+#Variable Importance for Chemical NSC (Optimal Model)
+chem_imp <- varImp(chem_glmnFit)
+plot(chem_imp, top = 5, main = "Top 5 Important Chemical Predictors")
+```
+The graph above shows the top 5 predictors for the chemical data set.  
+
+## **e.1)**	Now combine the biological and chemical fingerprint predictors into one predictor set. Retrain the same set of predictive models you built from part (c). Which model yields the best predictive performance? Is the model performance better than either of the best models from part (c)? 
+```{r Merge}
+set.seed(1)
+#Combine Biological and Chemical Data
+both_train <- cbind(bio_train_xTran, chem_train_xTran)
+both_test <- cbind(bio_test_xTran, chem_test_xTran)
+```
+
+#### Generalized Linear Model
+```{r GLMss, warning = FALSE}
+set.seed(1)
+#Create glm model
+
+both_glmFit <- train(x = both_train, 
+                y = dmg_train_y,
+                method = "glm",
+                preProc = c("center","scale"),
+                metric = "Sens",
+                family = "binomial",
+                trControl = ctrl)
+
+#Store Predictions
+both_testResults <- data.frame(obs = dmg_test_y)
+both_testResults$GLM <- predict(both_glmFit, both_test)
+
+
+```
+
+#### Linear Discriminant Analysis
+```{r LDAss, warning = FALSE}
+set.seed(1)
+#Create LDA model
+
+both_ldaFit <- train(x = both_train, 
+                y = dmg_train_y,
+                method = "lda",
+                preProc = c("center","scale"),
+                metric = "Sens",
+                family = "binomial",
+                trControl = ctrl)
+
+#Store Predictions
+both_testResults$LDA <- predict(both_ldaFit, both_test)
+```
+
+#### Penalized Logistic Regression
+```{r Penss, warning = FALSE}
+glmnGrid <- expand.grid(alpha = c(0,  .1,  .2, .4, .5, .6, .8, .9, 1),
+                        lambda = seq(.01, .3, length = 30))
+
+set.seed(1)
+#Create glmnet model
+
+both_glmnFit <- train(x = both_train, 
+                y = dmg_train_y,
+                method = "glmnet",
+                tuneGrid = glmnGrid,
+                preProc = c("center","scale"),
+                family = "binomial",
+                metric = "ROC", #ROC is used instead of Sens
+                trControl = ctrl)
+
+# metric = Sens results in a model with Yes predictions for nearly all  (Sens=~1 / Spec = ~0), 
+# therefore, ROC will be used instead, but FN will be looked at
+
+#Store Predictions
+both_testResults$GLMnet <- predict(both_glmnFit, both_test)
+```
+
+#### Nearest Shrunken Centroids 
+```{r}
+set.seed(1)
+#Create Nearest Shrunken Centroid model
+
+both_nscFit <- train(x = both_train, 
+                y = dmg_train_y,
+                method = "pam",
+                preProc = c("center","scale"),
+                metric = "ROC", #ROC is used instead of Sens
+                tuneGrid = data.frame(threshold = seq(0, 2, length = 30)),
+                trControl = ctrl)
+# metric = Sens results in a model with Yes predictions for all  (Sens=1 / Spec = 0), 
+# therefore, ROC will be used instead, but FN will be looked at
+
+#Store Predictions
+both_testResults$NSC <- predict(both_nscFit, both_test)
+
+```
+
+### Model Performance Comparison
+
+```{r comparemodels boths}
+set.seed(1)
+### Compare Models using confusion matrix - Both (Biological and Chemical)
+confusionMatrix(both_testResults$GLM, dmg_test_y, positive = "Yes")
+confusionMatrix(both_testResults$LDA, dmg_test_y, positive = "Yes")
+confusionMatrix(both_testResults$GLMnet, dmg_test_y, positive = "Yes")
+confusionMatrix(both_testResults$NSC, dmg_test_y, positive = "Yes")
+```
+
+
+```{r Best Boths}
+set.seed(1)
+# Best Model for Both data sets combined - NSC 
+confusionMatrix(both_testResults$NSC, dmg_test_y, positive = "Yes")
+# Final Model
+both_nscFit$finalModel
+```
+The nearest shrunken centroids yielded the best predictive model when both data sets are combined. However, the performance metrics are not as good as when the data sets are separated into chemical and biological data. The model has a threshold of 0.207.
+
+## **e.2)** What are the top five important predictors for the optimal model? How do these compare with the optimal predictors from each individual predictor set?
+
+```{r VarImpBioss}
+set.seed(1)
+#Variable Importance for NSC (Optimal Model)
+both_imp <- varImp(both_nscFit)
+plot(both_imp, top = 5, main = "Top 5 Important Predictors")
+```
+The graph above shows the top 5 predictors when the data sets are combined. The plot resembles the chemical data set more than the biological data set. For the biological data set, there are 2 predictors with almost the same importance, with the 3rd predictor slightly behind. As for the chemical data set (and for the combined data set), the first predictor is significantly more important than the second, and same with the third. Moreover, for the combined data set, the chemical data points are more important than the biological data set.     
+
+## **f)**	Which model (either model of individual biology or chemical fingerprints or the combined predictor model), if any, would you recommend using to predict compounds’ hepatic toxicity? Explain.
+
+Based on the results above, I would choose the chemical data set due to the chemical predictors having higher variable importance (as well as dominated the variable importance list). In addition, the chemical data set resulted in a higher accuracy with almost the same sensitivy rating (similar number of false negatives).
